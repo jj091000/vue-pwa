@@ -2,12 +2,12 @@
 export default {
   name: 'App',
   data: () => ({
+    database: null,
     todos: [],
     newTodo: '',
     editedTodo: null,
     visibility: 'all'
   }),
-
   computed: {
     activeTasks() {
       return this.todos.filter(todo => !todo.completed)
@@ -31,11 +31,13 @@ export default {
       set(value) {
         this.todos.forEach(todo => {
           todo.completed = value
+          this.saveTodo({
+            ...todo
+          })
         })
       }
     }
   },
-
   // methods that implement data logic.
   // note there's no DOM manipulation here at all.
   methods: {
@@ -46,53 +48,134 @@ export default {
         title: value,
         completed: false
       }
-
       if (!value) {
         return
       }
       this.todos.push(todoItem)
+      this.saveTodo(todoItem)
       this.newTodo = ''
     },
-
     cancelEdit(todo) {
       this.editedTodo = null
       todo.title = this.beforeEditCache
     },
-
     doneEdit(todo) {
       if (!this.editedTodo) {
         return
       }
       this.editedTodo = null
       todo.title = todo.title.trim()
+      this.saveTodo({
+        ...todo,
+        title: todo.title
+      })
       if (!todo.title) {
         this.removeTodo(todo)
       }
     },
-
     editTodo(todo) {
       this.beforeEditCache = todo.title
       this.editedTodo = todo
     },
-
+    async getDatabase() {
+      return new Promise((resolve, reject) => {
+        if (this.database) {
+          resolve(this.database)
+        }
+        let request = this.getIndexedDB().open('todomvcDB', 1)
+        request.onerror = event => {
+          console.error('ERROR: Unable to open database', event)
+          reject('Error')
+        }
+        request.onsuccess = event => {
+          this.database = event.target.result
+          resolve(this.database)
+        }
+        request.onupgradeneeded = event => {
+          let database = event.target.result
+          database.createObjectStore('todos', {
+            autoIncrement: true,
+            keyPath: 'id'
+          })
+        }
+      })
+    },
+    async getTodoStore() {
+      this.database = await this.getDatabase()
+      return new Promise((resolve, reject) => {
+        const transaction = this.database.transaction('todos', 'readonly')
+        const store = transaction.objectStore('todos')
+        let todoList = []
+        store.openCursor().onsuccess = event => {
+          const cursor = event.target.result
+          if (cursor) {
+            todoList.push(cursor.value)
+            cursor.continue()
+          }
+        }
+        transaction.oncomplete = () => {
+          resolve(todoList)
+        }
+        transaction.onerror = event => {
+          reject(event)
+        }
+      })
+    },
     pluralize(word, count) {
       return word + (count === 1 ? '' : 's')
     },
-
     removeCompleted() {
       this.todos = this.todos.filter(item => {
+        this.deleteTodo(item)
         return !item.completed
       })
     },
-
     removeTodo(todo) {
       const index = this.todos.indexOf(todo)
       this.todos.splice(index, 1)
+      this.deleteTodo(todo)
     },
+    async saveTodo(todo) {
+      this.database = await this.getDatabase()
+      return new Promise((resolve, reject) => {
+        const transaction = this.database.transaction('todos', 'readwrite')
+        const store = transaction.objectStore('todos')
+        store.put(todo)
+        transaction.oncomplete = () => {
+          resolve('Item successfully saved.')
+        }
+        transaction.onerror = event => {
+          reject(event)
+        }
+      })
+    },
+    async deleteTodo(todo) {
+      this.database = await this.getDatabase()
+      return new Promise((resolve, reject) => {
+          let transaction = this.database.transaction('todos', 'readwrite')
+          const store = transaction.objectStore('todos')
+          store.delete(todo.id)
 
+          transaction.oncomplete = () => {
+            resolve('Item successfully deleted')
+          }
+          transaction.onerror = event => {
+            reject(event)
+          }
+      })
+    },
     updateTodo(todo) {
       this.todos.find(item => item === todo).completed = !todo.completed
-    }
+      this.saveTodo({
+        ...todo
+      })
+    },
+    getIndexedDB(){
+      return window.indexedDB || window.mozIndexedDB || window.webkitIndexedDB || window.msIndexedDB;
+    },
+  },
+  async created() {
+    this.todos = await this.getTodoStore()
   }
 }
 </script>
@@ -201,7 +284,6 @@ export default {
 <style>
 @import './styles/todomvc-base.css';
 @import './styles/todomvc-index.css';
-
 #app {
   font-family: Avenir, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -210,7 +292,6 @@ export default {
   color: #2c3e50;
   margin-top: 60px;
 }
-
 .btn {
   padding: 0 10px;
 }
